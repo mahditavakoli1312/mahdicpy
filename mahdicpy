@@ -1,0 +1,879 @@
+#!/usr/bin/env python3
+"""mahdicpy — a supercharged front-end for scrcpy.
+
+Every unknown option is forwarded to scrcpy unchanged, so anything scrcpy can
+do, mahdicpy can do too. See README.md for the full guide.
+"""
+
+import json
+import math
+import os
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+VERSION = "1.0.0"
+HERE = Path(os.path.realpath(__file__)).parent
+
+
+def find_tool(name):
+    """Bundled copy (next to mahdicpy or in vendor/) first, then PATH."""
+    for d in (HERE, HERE / "vendor"):
+        if (d / name).is_file():
+            return str(d / name)
+    return shutil.which(name) or name
+
+
+def find_server_jar():
+    candidates = [os.environ.get("SCRCPY_SERVER_PATH"), HERE / "scrcpy-server", HERE / "vendor" / "scrcpy-server",
+                  Path(os.path.realpath(SCRCPY)).parent / "scrcpy-server"]
+    candidates += [Path(p) / "share/scrcpy/scrcpy-server" for p in ("/opt/homebrew", "/usr/local", "/usr")]
+    for c in candidates:
+        if c and Path(c).is_file():
+            return Path(c)
+    return None
+
+
+SCRCPY = find_tool("scrcpy")
+ADB = find_tool("adb")
+ICON = HERE / "mahdicpy.png"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "mahdicpy"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+RECORD_DIR = Path.home() / "Movies" / "mahdicpy"
+SHOT_DIR = Path.home() / "Pictures" / "mahdicpy"
+EXIT_DISCONNECTED = 2  # scrcpy exit code when the device goes away
+
+# ─────────────────────────────── styling ────────────────────────────────
+
+_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
+def _c(code):
+    return (lambda s: f"\033[{code}m{s}\033[0m") if _COLOR else (lambda s: str(s))
+
+
+bold, dim, red, green, yellow, blue, magenta, cyan = (
+    _c("1"), _c("2"), _c("31"), _c("32"), _c("33"), _c("34"), _c("35"), _c("36"))
+
+
+def gradient(text):
+    if not _COLOR:
+        return text
+    stops = [(168, 85, 247), (99, 102, 241), (6, 182, 212), (16, 185, 129)]
+    out, n = [], max(len(text) - 1, 1)
+    for i, ch in enumerate(text):
+        t = i / n * (len(stops) - 1)
+        a, b = stops[int(t)], stops[min(int(t) + 1, len(stops) - 1)]
+        f = t - int(t)
+        r, g, bb = (int(a[k] + (b[k] - a[k]) * f) for k in range(3))
+        out.append(f"\033[1;38;2;{r};{g};{bb}m{ch}")
+    return "".join(out) + "\033[0m"
+
+
+BANNER = r"""
+  __  __   _   _  _ ___ ___ ___ _____   __
+ |  \/  | /_\ | || |   \_ _/ __| _ \ \ / /
+ | |\/| |/ _ \| __ | |) | | (__|  _/\ V /
+ |_|  |_/_/ \_\_||_|___/___\___|_|   |_|
+"""
+
+
+def banner():
+    for line in BANNER.strip("\n").splitlines():
+        print(gradient(line))
+    print(dim(f"  v{VERSION} · powered by scrcpy · Android mirroring on steroids\n"))
+
+
+def info(msg):
+    print(f"{cyan('›')} {msg}")
+
+
+def ok(msg):
+    print(f"{green('✔')} {msg}")
+
+
+def warn(msg):
+    print(f"{yellow('!')} {msg}", file=sys.stderr)
+
+
+def die(msg, code=1):
+    print(f"{red('✖')} {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+# ─────────────────────────────── config ─────────────────────────────────
+
+def load_config():
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text())
+    except (OSError, ValueError):
+        cfg = {}
+    cfg.setdefault("defaults", [])
+    cfg.setdefault("profiles", {})
+    cfg.setdefault("devices", {})
+    return cfg
+
+
+def save_config(cfg):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+
+
+# ─────────────────────────────── adb helpers ────────────────────────────
+
+def adb(*args, serial=None, check=False, timeout=30):
+    cmd = [ADB] + (["-s", serial] if serial else []) + list(args)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if check:
+            die(f"adb timed out: {' '.join(args)}")
+        return ""
+    if check and p.returncode != 0:
+        die(f"adb {' '.join(args)} failed: {(p.stderr or p.stdout).strip()}")
+    return p.stdout
+
+
+def shell(serial, command):
+    return adb("shell", command, serial=serial).strip()
+
+
+def list_devices():
+    devices = []
+    for line in adb("devices", "-l").splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        d = {"serial": parts[0], "state": parts[1]}
+        for p in parts[2:]:
+            if ":" in p:
+                k, v = p.split(":", 1)
+                d[k] = v.replace("_", " ")
+        d["wifi"] = is_wifi(d["serial"])
+        devices.append(d)
+    return devices
+
+
+def is_wifi(serial):
+    return bool(re.match(r"^[\d.]+:\d+$", serial)) or serial.startswith("adb-")
+
+
+def device_ip(serial):
+    out = shell(serial, "ip -f inet addr show wlan0")
+    m = re.search(r"inet ([\d.]+)/", out)
+    if m:
+        return m.group(1)
+    m = re.search(r"src ([\d.]+)", shell(serial, "ip route"))
+    return m.group(1) if m else None
+
+
+def label(d):
+    name = d.get("model") or d["serial"]
+    link = "Wi-Fi" if d["wifi"] else "USB"
+    return f"{bold(name)} {dim(d['serial'])} {cyan(link)}"
+
+
+def pick_device(serial=None, cfg=None):
+    """Resolve which device to use; connect over Wi-Fi if needed."""
+    devs = list_devices()
+    if serial:
+        for d in devs:
+            if d["serial"] == serial:
+                return ensure_ready(d)
+        if re.match(r"^[\d.]+(:\d+)?$", serial):
+            target = serial if ":" in serial else f"{serial}:5555"
+            return connect_wifi(target)
+        die(f"device {serial} not found. Run: mahdicpy devices")
+
+    ready = [d for d in devs if d["state"] == "device"]
+    if not ready:
+        for d in devs:
+            ensure_ready(d)  # explains unauthorized / offline
+        last = (cfg or {}).get("last_wifi")
+        if last:
+            info(f"no device attached, trying last Wi-Fi device {bold(last)}…")
+            d = connect_wifi(last, fatal=False)
+            if d:
+                return d
+        die("no device found. Plug in a phone with USB debugging enabled, "
+            "or run: mahdicpy pair / mahdicpy wifi <ip>")
+    if len(ready) == 1 or not sys.stdin.isatty():
+        return ready[0]
+
+    print(bold("Several devices are connected:"))
+    for i, d in enumerate(ready, 1):
+        print(f"  {magenta(i)}) {label(d)}")
+    while True:
+        try:
+            choice = input(f"{cyan('?')} Pick one [1-{len(ready)}]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(130)
+        if choice.isdigit() and 1 <= int(choice) <= len(ready):
+            return ready[int(choice) - 1]
+
+
+def ensure_ready(d):
+    if d["state"] == "unauthorized":
+        die(f"{d['serial']} is unauthorized — unlock the phone and accept "
+            "the 'Allow USB debugging' prompt.")
+    if d["state"] == "offline":
+        die(f"{d['serial']} is offline — replug the cable or run: mahdicpy restart-adb")
+    return d
+
+
+def connect_wifi(target, fatal=True):
+    if ":" not in target:
+        target += ":5555"
+    for _ in range(3):
+        out = adb("connect", target, timeout=10)
+        if "connected" in out and "cannot" not in out:
+            for d in list_devices():
+                if d["serial"] == target and d["state"] == "device":
+                    cfg = load_config()
+                    cfg["last_wifi"] = target
+                    save_config(cfg)
+                    return d
+        time.sleep(1)
+    if fatal:
+        die(f"could not connect to {target}. Is the phone on the same network?")
+    return None
+
+
+# ─────────────────────────────── presets ────────────────────────────────
+
+PRESETS = {
+    "mirror": dict(args=[], smart=True,
+                   help="smart mirroring (auto-tuned for USB / Wi-Fi)"),
+    "game": dict(args=["--video-bit-rate=16M", "--max-fps=120", "--video-buffer=0",
+                       "--audio-buffer=30", "--keyboard=uhid", "--stay-awake"],
+                 smart=True, help="low-latency 120fps + physical keyboard for gaming"),
+    "hq": dict(args=["--video-bit-rate=24M", "--max-fps=60", "--audio-bit-rate=256K"],
+               smart=True, help="maximum quality"),
+    "low": dict(args=["--max-size=800", "--video-bit-rate=2M", "--max-fps=30",
+                      "--audio-bit-rate=64K"],
+                smart=True, help="low bandwidth / weak Wi-Fi"),
+    "present": dict(args=["--show-touches", "--stay-awake", "--always-on-top"],
+                    smart=True, help="demo mode: shows touches, always on top"),
+    "stealth": dict(args=["--turn-screen-off", "--stay-awake", "--power-off-on-close"],
+                    smart=True, help="phone screen stays off while you control it"),
+    "desktop": dict(args=["--new-display=1920x1080/200"], smart=True,
+                    help="separate 1080p desktop-like virtual display"),
+    "cam": dict(args=["--video-source=camera", "--camera-facing=back", "--no-audio"],
+                smart=False, help="use the phone camera (cam front | cam back)"),
+    "audio": dict(args=["--no-video", "--no-control"], smart=False,
+                  help="play phone audio on the Mac, no window"),
+    "mic": dict(args=["--no-video", "--no-control", "--audio-source=mic"], smart=False,
+                help="use the phone as a wireless microphone"),
+    "otg": dict(args=["--otg"], smart=False, needs_adb=False,
+                help="control the phone with Mac keyboard/mouse only (no adb)"),
+    "rec": dict(args=[], smart=True, record=True,
+                help="mirror + auto-named recording (rec --silent: no window)"),
+}
+
+
+# ─────────────────────────────── option parsing ─────────────────────────
+
+class Opts:
+    def __init__(self):
+        self.serial = None
+        self.record = None  # None, True (auto name) or a path
+        self.gif = False
+        self.watch = False
+        self.dry = False
+        self.smart = True
+        self.profiles = []
+        self.silent = False
+
+
+def extract(args):
+    """Pull mahdicpy's own flags out; everything else goes to scrcpy."""
+    o, rest, i = Opts(), [], 0
+    while i < len(args):
+        a = args[i]
+        nxt = args[i + 1] if i + 1 < len(args) else None
+        if a in ("-s", "--serial") and nxt:
+            o.serial, i = nxt, i + 1
+        elif a.startswith("--serial="):
+            o.serial = a.split("=", 1)[1]
+        elif a == "--rec":
+            o.record = True
+        elif a.startswith("--rec="):
+            o.record = a.split("=", 1)[1]
+        elif a == "--gif":
+            o.gif = True
+            o.record = o.record or True
+        elif a == "--watch":
+            o.watch = True
+        elif a in ("--dry-run", "--dry"):
+            o.dry = True
+        elif a == "--no-smart":
+            o.smart = False
+        elif a == "--silent":
+            o.silent = True
+        elif a == "--profile" and nxt:
+            o.profiles.append(nxt)
+            i += 1
+        elif a.startswith("--profile="):
+            o.profiles.append(a.split("=", 1)[1])
+        elif a.startswith("@") and len(a) > 1:
+            o.profiles.append(a[1:])
+        elif a == "--":
+            rest.extend(args[i + 1:])
+            break
+        else:
+            rest.append(a)
+        i += 1
+    return o, rest
+
+
+def smart_args(d):
+    name = d.get("model") or d["serial"]
+    args = [f"--window-title=mahdicpy · {name}"]
+    if d["wifi"]:
+        args += ["--max-size=1600", "--video-bit-rate=6M"]
+    else:
+        args += ["--stay-awake"]
+    return args
+
+
+def record_path(d):
+    RECORD_DIR.mkdir(parents=True, exist_ok=True)
+    name = re.sub(r"[^\w.-]+", "_", (d or {}).get("model") or "android")
+    return RECORD_DIR / f"{name}_{datetime.now():%Y%m%d-%H%M%S}.mp4"
+
+
+# ─────────────────────────────── running scrcpy ─────────────────────────
+
+def scrcpy_env():
+    env = dict(os.environ, ADB=ADB)
+    if ICON.exists():
+        env.setdefault("SCRCPY_ICON_PATH", str(ICON))
+    return env
+
+
+def run_scrcpy(argv, dry=False):
+    cmd = [SCRCPY] + argv
+    print(dim("  $ scrcpy " + shlex.join(argv)))
+    if dry:
+        return 0
+    try:
+        return subprocess.call(cmd, env=scrcpy_env())
+    except KeyboardInterrupt:
+        return 130
+    except FileNotFoundError:
+        die(f"scrcpy not found at {SCRCPY}")
+
+
+def cmd_mirror(preset_name, args):
+    cfg = load_config()
+    preset = PRESETS[preset_name]
+    o, rest = extract(args)
+
+    # preset-specific positional arguments
+    if preset_name == "cam" and rest and rest[0] in ("front", "back", "external"):
+        preset = dict(preset, args=preset["args"] + [f"--camera-facing={rest.pop(0)}"])
+    if preset_name == "desktop" and rest and re.match(r"^\d+x\d+(/\d+)?$|^/\d+$", rest[0]):
+        preset = dict(preset, args=[f"--new-display={rest.pop(0)}"])
+    if preset.get("record"):
+        o.record = o.record or True
+
+    d = None
+    if preset.get("needs_adb", True):
+        d = pick_device(o.serial, cfg)
+        info(f"device: {label(d)}")
+
+    argv = []
+    if d:
+        argv += ["--serial", d["serial"]]
+        if o.smart and preset["smart"]:
+            argv += smart_args(d)
+    argv += cfg["defaults"]
+    if d:
+        argv += cfg["devices"].get(d["serial"], [])
+    argv += preset["args"]
+    for p in o.profiles:
+        if p not in cfg["profiles"]:
+            die(f"unknown profile '{p}'. Run: mahdicpy profile list")
+        argv += cfg["profiles"][p]
+    argv += rest
+
+    out = None
+    if o.record:
+        out = Path(o.record) if o.record is not True else record_path(d)
+        argv += [f"--record={out}"]
+        if o.silent:
+            argv += ["--no-window"]
+        info(f"recording to {bold(out)} {dim('(close the window or Ctrl+C to stop)')}")
+
+    rc = run_loop(argv, d, o)
+
+    if out and out.exists() and not o.dry:
+        ok(f"saved {bold(out)} ({out.stat().st_size / 1e6:.1f} MB)")
+        if o.gif:
+            make_gif(out)
+    return rc
+
+
+def run_loop(argv, d, o):
+    while True:
+        rc = run_scrcpy(argv, o.dry)
+        if not o.watch or rc != EXIT_DISCONNECTED or d is None:
+            return rc
+        warn("device disconnected — waiting for it to come back (Ctrl+C to quit)…")
+        try:
+            while not any(x["serial"] == d["serial"] and x["state"] == "device"
+                          for x in list_devices()):
+                if d["wifi"]:
+                    adb("connect", d["serial"], timeout=5)
+                time.sleep(2)
+        except KeyboardInterrupt:
+            print()
+            return 130
+        ok("device is back, reconnecting")
+        if o.record:  # never overwrite the previous take
+            argv = [a for a in argv if not a.startswith("--record=")]
+            argv.append(f"--record={record_path(d)}")
+
+
+def make_gif(mp4):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        warn("ffmpeg not installed, skipping GIF (brew install ffmpeg)")
+        return
+    gif = mp4.with_suffix(".gif")
+    info("converting to GIF…")
+    vf = "fps=15,scale=480:-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse"
+    r = subprocess.run([ffmpeg, "-loglevel", "error", "-y", "-i", str(mp4), "-vf", vf,
+                        str(gif)])
+    if r.returncode == 0:
+        ok(f"GIF: {bold(gif)} ({gif.stat().st_size / 1e6:.1f} MB)")
+
+
+# ─────────────────────────────── commands ───────────────────────────────
+
+def cmd_app(args):
+    o, rest = extract(args)
+    here = "--here" in rest
+    if here:
+        rest.remove("--here")
+    if not rest or rest[0].startswith("-"):
+        die("usage: mahdicpy app <name|package> [--here] [scrcpy options]")
+    name = rest.pop(0)
+    target = name if "." in name else f"?{name}"
+    extra = [f"--start-app={target}"] + ([] if here else ["--new-display"])
+    return cmd_mirror("mirror", _reinject(o) + extra + rest)
+
+
+def _reinject(o):
+    """Rebuild mahdicpy flags so helpers can call cmd_mirror again."""
+    a = []
+    if o.serial:
+        a += ["-s", o.serial]
+    if o.record is True:
+        a += ["--rec"]
+    elif o.record:
+        a += [f"--rec={o.record}"]
+    for flag, on in (("--gif", o.gif), ("--watch", o.watch), ("--dry-run", o.dry),
+                     ("--no-smart", not o.smart), ("--silent", o.silent)):
+        if on:
+            a.append(flag)
+    return a + [f"@{p}" for p in o.profiles]
+
+
+def cmd_wifi(args):
+    o, rest = extract(args)
+    cfg = load_config()
+    if rest and re.match(r"^[\d.]+(:\d+)?$", rest[0]):
+        d = connect_wifi(rest.pop(0))
+    else:
+        usb = [x for x in list_devices() if x["state"] == "device" and not x["wifi"]]
+        if o.serial:
+            usb = [x for x in usb if x["serial"] == o.serial]
+        if not usb:
+            last = cfg.get("last_wifi")
+            if not last:
+                die("connect the phone via USB once (or run: mahdicpy pair)")
+            info(f"reconnecting to {bold(last)}…")
+            d = connect_wifi(last)
+        else:
+            src = usb[0] if len(usb) == 1 else pick_device(None, cfg)
+            ip = device_ip(src["serial"])
+            if not ip:
+                die("phone is not on Wi-Fi")
+            info(f"switching {label(src)} to Wi-Fi at {bold(ip)}…")
+            adb("tcpip", "5555", serial=src["serial"])
+            time.sleep(2)
+            d = connect_wifi(f"{ip}:5555")
+            ok("connected — you can unplug the cable now")
+    o.serial = d["serial"]
+    return cmd_mirror("mirror", _reinject(o) + rest)
+
+
+def cmd_pair(args):
+    print(bold("Wireless pairing (Android 11+)"))
+    print(dim("  Phone: Settings › Developer options › Wireless debugging › "
+              "Pair device with pairing code"))
+    try:
+        addr = args[0] if args else input(f"{cyan('?')} IP:port shown on the phone: ").strip()
+        code = args[1] if len(args) > 1 else input(f"{cyan('?')} 6-digit pairing code: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return 130
+    out = adb("pair", addr, code, timeout=30)
+    if "Successfully paired" not in out:
+        die(f"pairing failed: {out.strip() or 'no answer'}")
+    ok("paired")
+    ip = addr.split(":")[0]
+    time.sleep(1)
+    for line in adb("mdns", "services").splitlines():
+        if "_adb-tls-connect" in line and ip in line:
+            m = re.search(r"([\d.]+:\d+)", line)
+            if m:
+                d = connect_wifi(m.group(1))
+                ok(f"connected to {label(d)}")
+                return 0
+    try:
+        port = input(f"{cyan('?')} Port shown under 'IP address & Port' on the "
+                     "Wireless debugging screen: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return 130
+    d = connect_wifi(f"{ip}:{port}")
+    ok(f"connected to {label(d)} — run: mahdicpy")
+    return 0
+
+
+def cmd_all(args):
+    o, rest = extract(args)
+    cfg = load_config()
+    devs = [d for d in list_devices() if d["state"] == "device"]
+    if not devs:
+        die("no devices connected")
+    sw, sh = screen_size()
+    cols = min(len(devs), 4)
+    rows = math.ceil(len(devs) / cols)
+    w, h = sw // cols, (sh - 40) // rows
+    info(f"launching {bold(len(devs))} devices in a {cols}×{rows} grid")
+    procs = []
+    for i, d in enumerate(devs):
+        x, y = (i % cols) * w, 40 + (i // cols) * h
+        argv = ["--serial", d["serial"]] + (smart_args(d) if o.smart else [])
+        argv += [f"--window-x={x}", f"--window-y={y}",
+                 f"--window-width={w}", f"--window-height={h - 30}"]
+        argv += cfg["defaults"] + cfg["devices"].get(d["serial"], [])
+        for p in o.profiles:
+            argv += cfg["profiles"].get(p, [])
+        argv += rest
+        if o.record:
+            argv += [f"--record={record_path(d)}"]
+        print(dim("  $ scrcpy " + shlex.join(argv)))
+        if not o.dry:
+            procs.append(subprocess.Popen([SCRCPY] + argv, env=scrcpy_env()))
+    try:
+        for p in procs:
+            p.wait()
+    except KeyboardInterrupt:
+        for p in procs:
+            p.send_signal(signal.SIGINT)
+        for p in procs:
+            p.wait()
+    return 0
+
+
+def screen_size():
+    try:
+        out = subprocess.run(["system_profiler", "SPDisplaysDataType"],
+                             capture_output=True, text=True, timeout=10).stdout
+        m = re.search(r"UI Looks like: (\d+) x (\d+)", out) or \
+            re.search(r"Resolution: (\d+) x (\d+)", out)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return 1440, 900
+
+
+def cmd_shot(args):
+    o, rest = extract(args)
+    d = pick_device(o.serial, load_config())
+    SHOT_DIR.mkdir(parents=True, exist_ok=True)
+    name = re.sub(r"[^\w.-]+", "_", d.get("model") or "android")
+    path = SHOT_DIR / f"{name}_{datetime.now():%Y%m%d-%H%M%S}.png"
+    data = subprocess.run([ADB, "-s", d["serial"], "exec-out", "screencap", "-p"],
+                          capture_output=True).stdout
+    if not data.startswith(b"\x89PNG"):
+        die("screenshot failed (is the screen protected, e.g. a banking app?)")
+    path.write_bytes(data)
+    ok(f"screenshot: {bold(path)}")
+    if "--no-clip" not in rest and sys.platform == "darwin":
+        subprocess.run(["osascript", "-e",
+                        f'set the clipboard to (read (POSIX file "{path}") as «class PNGf»)'],
+                       capture_output=True)
+        ok("copied to clipboard — paste it anywhere with ⌘V")
+    if "--open" in rest:
+        subprocess.run(["open", str(path)])
+    return 0
+
+
+def cmd_info(args):
+    o, _ = extract(args)
+    d = pick_device(o.serial, load_config())
+    s = d["serial"]
+    prop = lambda k: shell(s, f"getprop {k}")
+    batt = shell(s, "dumpsys battery")
+    level = int((re.search(r"level: (\d+)", batt) or [0, 0])[1])
+    temp = int((re.search(r"temperature: (\d+)", batt) or [0, 0])[1]) / 10
+    charging = (re.search(r"status: (\d+)", batt) or [0, "0"])[1] == "2"
+    mem = re.search(r"MemTotal:\s+(\d+)", shell(s, "cat /proc/meminfo"))
+    df = shell(s, "df -h /data").splitlines()
+    storage = df[-1].split() if len(df) > 1 else []
+    size = (re.search(r"(\d+x\d+)", shell(s, "wm size")) or [0, "?"])[1]
+    dens = (re.search(r"(\d+)\s*$", shell(s, "wm density")) or [0, "?"])[1]
+
+    bar_color = green if level > 50 else yellow if level > 20 else red
+    bar = bar_color("▰" * (level // 10)) + dim("▱" * (10 - level // 10))
+    rows = [
+        ("Device", f"{prop('ro.product.manufacturer')} {prop('ro.product.model')}"),
+        ("Android", f"{prop('ro.build.version.release')} (API {prop('ro.build.version.sdk')})"),
+        ("Chip", prop("ro.soc.model") or prop("ro.board.platform")),
+        ("RAM", f"{int(mem.group(1)) / 1048576:.1f} GB" if mem else "?"),
+        ("Screen", f"{size} @ {dens} dpi"),
+        ("Battery", f"{bar} {level}% · {temp:.1f}°C" + (f" · {green('⚡ charging')}" if charging else "")),
+        ("Storage", f"{storage[2]} used of {storage[1]} ({storage[4]})" if len(storage) >= 5 else "?"),
+        ("Wi-Fi IP", device_ip(s) or dim("not connected")),
+        ("Serial", f"{s} ({'Wi-Fi' if d['wifi'] else 'USB'})"),
+    ]
+    print()
+    for k, v in rows:
+        print(f"  {cyan(k.ljust(9))} {v}")
+    print()
+    return 0
+
+
+def cmd_devices(args):
+    devs = list_devices()
+    if not devs:
+        warn("no devices. Plug in via USB or run: mahdicpy pair")
+        return 1
+    for d in devs:
+        state = {"device": green("ready"), "unauthorized": yellow("unauthorized"),
+                 "offline": red("offline")}.get(d["state"], d["state"])
+        print(f"  {label(d)}  {state}")
+    return 0
+
+
+def cmd_install(args):
+    o, files = extract(args)
+    if not files:
+        die("usage: mahdicpy install app.apk [more.apk …]")
+    d = pick_device(o.serial, load_config())
+    failed = 0
+    for f in files:
+        info(f"installing {bold(Path(f).name)}…")
+        p = subprocess.run([ADB, "-s", d["serial"], "install", "-r", "-g", f],
+                           capture_output=True, text=True)
+        if "Success" in p.stdout:
+            ok(Path(f).name)
+        else:
+            failed += 1
+            warn((p.stderr or p.stdout).strip().splitlines()[-1] if (p.stderr or p.stdout) else "failed")
+    return 1 if failed else 0
+
+
+def cmd_profile(args):
+    cfg = load_config()
+    sub = args[0] if args else "list"
+    if sub == "list":
+        if not cfg["profiles"] and not cfg["defaults"] and not cfg["devices"]:
+            info("no profiles yet. Example: mahdicpy profile save work -m 1280 --always-on-top")
+        if cfg["defaults"]:
+            print(f"  {magenta('defaults'.ljust(12))} {' '.join(cfg['defaults'])}")
+        for k, v in cfg["profiles"].items():
+            print(f"  {cyan(('@' + k).ljust(12))} {' '.join(v)}")
+        for k, v in cfg["devices"].items():
+            print(f"  {yellow(k.ljust(12))} {' '.join(v)} {dim('(device)')}")
+        return 0
+    if sub == "save" and len(args) >= 2:
+        cfg["profiles"][args[1]] = args[2:]
+        save_config(cfg)
+        ok(f"saved profile @{args[1]} → use it with: mahdicpy @{args[1]}")
+    elif sub in ("rm", "delete") and len(args) >= 2:
+        if cfg["profiles"].pop(args[1], None) is None:
+            die(f"no profile '{args[1]}'")
+        save_config(cfg)
+        ok(f"removed @{args[1]}")
+    elif sub == "defaults":
+        cfg["defaults"] = args[1:]
+        save_config(cfg)
+        ok("defaults " + ("cleared" if not args[1:] else "saved: " + " ".join(args[1:])))
+    elif sub == "device":
+        d = pick_device(None, cfg)
+        cfg["devices"][d["serial"]] = args[1:]
+        save_config(cfg)
+        ok(f"options for {label(d)} saved")
+    elif sub == "path":
+        print(CONFIG_FILE)
+    else:
+        die("usage: mahdicpy profile [list | save NAME opts… | rm NAME | "
+            "defaults opts… | device opts… | path]")
+    return 0
+
+
+def cmd_doctor(args):
+    good = True
+
+    def check(cond, yes, no):
+        nonlocal good
+        (ok(yes) if cond else warn(no))
+        good = good and bool(cond)
+
+    ver = subprocess.run([SCRCPY, "--version"], capture_output=True, text=True).stdout.split("\n")[0] \
+        if Path(SCRCPY).exists() or shutil.which(SCRCPY) else ""
+    check(ver, f"scrcpy: {ver}", f"scrcpy not found at {SCRCPY}")
+    check(Path(ADB).exists() or shutil.which(ADB), f"adb: {ADB}", "adb not found (run ./install.sh)")
+    jar = find_server_jar()
+    check(jar, f"scrcpy-server: {jar}", "scrcpy-server not found (run ./install.sh)")
+    check(sys.version_info >= (3, 8), f"python {sys.version.split()[0]}", "python 3.8+ required")
+    if shutil.which("ffmpeg"):
+        ok("ffmpeg found (GIF export enabled)")
+    else:
+        info(dim("ffmpeg not found — optional, needed only for --gif (brew install ffmpeg)"))
+    devs = list_devices()
+    ready = [d for d in devs if d["state"] == "device"]
+    check(ready, f"{len(ready)} device(s) ready", "no ready device")
+    for d in devs:
+        if d["state"] != "device":
+            warn(f"{d['serial']} is {d['state']}")
+    on_path = shutil.which("mahdicpy")
+    if not on_path:
+        info(dim("tip: run 'mahdicpy link' to use mahdicpy from anywhere"))
+    return 0 if good else 1
+
+
+def cmd_link(args):
+    dest = Path(args[0]) if args else Path("/usr/local/bin/mahdicpy")
+    src = Path(os.path.realpath(__file__))
+    try:
+        if dest.is_symlink() or dest.exists():
+            dest.unlink()
+        dest.symlink_to(src)
+        ok(f"linked {bold(dest)} → {src}")
+    except PermissionError:
+        warn("permission denied, run:")
+        print(f"  sudo ln -sf '{src}' '{dest}'")
+        return 1
+    return 0
+
+
+def cmd_restart_adb(args):
+    adb("kill-server")
+    adb("start-server")
+    ok("adb restarted")
+    return cmd_devices([])
+
+
+def cmd_disconnect(args):
+    print(adb("disconnect", *args).strip())
+    return 0
+
+
+def cmd_web(args):
+    server = HERE / "web" / "server.py"
+    if not server.exists():
+        die(f"web panel not found at {server}")
+    if "--no-open" in args:
+        args = [a for a in args if a != "--no-open"]
+    elif "--open" not in args:
+        args = args + ["--open"]
+    try:
+        return subprocess.call([sys.executable, str(server)] + args)
+    except KeyboardInterrupt:
+        return 0
+
+
+def cmd_help(args=None):
+    banner()
+    w = 25
+    print(bold("USAGE"))
+    print(f"  mahdicpy [mode] [mahdicpy options] [any scrcpy option]\n")
+    print(bold("MODES"))
+    for k, v in PRESETS.items():
+        print(f"  {cyan(k.ljust(w))}{v['help']}")
+    print(f"  {cyan('app <name>'.ljust(w))}open an app in its own window (--here: on main screen)")
+    print(f"  {cyan('all'.ljust(w))}mirror every connected device side by side")
+    print(f"  {cyan('wifi [ip]'.ljust(w))}go wireless (from USB, an IP, or the last used phone)")
+    print()
+    print(bold("TOOLS"))
+    tools = [
+        ("web [--lan]", "browser panel: mirror + developer toolkit"),
+        ("devices", "list devices"),
+        ("info", "device dashboard: battery, storage, RAM, IP…"),
+        ("shot [--open]", "screenshot → ~/Pictures/mahdicpy + clipboard"),
+        ("install <apk…>", "install one or more APKs"),
+        ("pair [ip:port code]", "wireless pairing for Android 11+"),
+        ("disconnect [ip]", "drop Wi-Fi connections"),
+        ("profile …", "save & reuse option sets (see README)"),
+        ("doctor", "check your setup"),
+        ("link", "install mahdicpy command in /usr/local/bin"),
+        ("restart-adb", "fix stuck/offline devices"),
+    ]
+    for k, v in tools:
+        print(f"  {cyan(k.ljust(w))}{v}")
+    print()
+    print(bold("OPTIONS"))
+    opts = [
+        ("-s <serial|ip>", "choose device (IP connects over Wi-Fi)"),
+        ("--rec[=file.mp4]", "record (auto-named in ~/Movies/mahdicpy)"),
+        ("--gif", "record and also export a GIF (needs ffmpeg)"),
+        ("--watch", "auto-reconnect when the device drops"),
+        ("@name / --profile name", "apply a saved profile"),
+        ("--no-smart", "disable automatic tuning"),
+        ("--dry-run", "print the scrcpy command without running"),
+    ]
+    for k, v in opts:
+        print(f"  {yellow(k.ljust(w))}{v}")
+    print()
+    print(dim("  Examples:  mahdicpy game --watch   ·   mahdicpy app telegram   ·   "
+              "mahdicpy rec --gif   ·   mahdicpy wifi"))
+    print(dim("  Full guide: README.md   ·   scrcpy options: ./scrcpy --help\n"))
+    return 0
+
+
+COMMANDS = {
+    "app": cmd_app, "wifi": cmd_wifi, "pair": cmd_pair, "all": cmd_all,
+    "shot": cmd_shot, "screenshot": cmd_shot, "info": cmd_info,
+    "devices": cmd_devices, "ls": cmd_devices, "install": cmd_install,
+    "profile": cmd_profile, "doctor": cmd_doctor, "link": cmd_link,
+    "restart-adb": cmd_restart_adb, "disconnect": cmd_disconnect,
+    "web": cmd_web, "panel": cmd_web,
+    "help": cmd_help, "-h": cmd_help, "--help": cmd_help,
+}
+
+
+def main(argv):
+    if argv and argv[0] in ("-v", "--version", "version"):
+        print(f"mahdicpy {VERSION}")
+        return subprocess.call([SCRCPY, "--version"])
+    if not argv:
+        return cmd_mirror("mirror", [])
+    head, rest = argv[0], argv[1:]
+    if head in COMMANDS:
+        return COMMANDS[head](rest)
+    if head in PRESETS:
+        return cmd_mirror(head, rest)
+    return cmd_mirror("mirror", argv)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]) or 0)
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)

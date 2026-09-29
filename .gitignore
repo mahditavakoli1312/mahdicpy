@@ -1,0 +1,13 @@
+# scrcpy release files (downloaded by ./install.sh — not part of this repo)
+/vendor/
+/scrcpy
+/scrcpy-server
+/scrcpy.1
+/adb
+/icon.png
+
+__pycache__/
+*.pyc
+.DS_Store
+*.mp4
+*.gif

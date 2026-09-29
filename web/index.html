@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mahdicpy</title>
+<link rel="icon" href="/icon.png">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <!-- ───────────── sidebar ───────────── -->
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="/icon.png" alt="">
+      <div>
+        <div class="brand-name">mahdicpy</div>
+        <div class="brand-sub">web panel</div>
+      </div>
+    </div>
+
+    <div class="side-head">
+      <span>Devices</span>
+      <button class="icon-btn admin-only" id="btn-connect" title="Connect a device">＋</button>
+    </div>
+    <div id="device-list" class="device-list"></div>
+
+    <div class="side-foot">
+      <div id="share-box" class="share-box admin-only"></div>
+      <button class="ghost-btn" id="btn-palette"><span>Command palette</span><kbd>⌘K</kbd></button>
+      <div class="role-line"><span id="role-badge" class="badge"></span><span id="version" class="muted"></span></div>
+    </div>
+  </aside>
+
+  <!-- ───────────── stage ───────────── -->
+  <main class="stage">
+    <div class="stage-top">
+      <div class="stage-title">
+        <h1 id="dev-title">No device</h1>
+        <div class="pills">
+          <span class="pill" id="pill-state"><i class="dot"></i><b>offline</b></span>
+          <span class="pill" id="pill-fps">— fps</span>
+          <span class="pill" id="pill-rate">— Mbps</span>
+          <span class="pill" id="pill-lat">— ms</span>
+          <span class="pill" id="pill-res">—</span>
+          <span class="pill" id="pill-viewers" title="People watching this device">👁 0</span>
+        </div>
+      </div>
+      <div class="stage-actions admin-only">
+        <select id="quality" title="Stream quality">
+          <option value="720,2,30">Low · 720p</option>
+          <option value="1024,4,60" selected>Balanced · 1024p</option>
+          <option value="1600,8,60">High · 1600p</option>
+          <option value="0,16,60">Native · max</option>
+        </select>
+        <div class="menu-wrap">
+          <button class="btn" id="btn-native" title="Open a native scrcpy window on the host Mac">⧉ Native window ▾</button>
+          <div class="menu" id="native-menu"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="screen-area" id="screen-area">
+      <div class="phone" id="phone">
+        <canvas id="screen" tabindex="0" width="360" height="640"></canvas>
+        <div id="inspect-layer" class="inspect-layer"></div>
+        <div id="screen-msg" class="screen-msg">
+          <div class="spinner"></div>
+          <div id="screen-msg-text">Pick a device to start</div>
+        </div>
+        <div id="kbd-hint" class="kbd-hint">⌨ keyboard captured · Esc = Back · click outside to release</div>
+      </div>
+    </div>
+
+    <div class="navbar admin-only" id="navbar">
+      <div class="nav-group">
+        <button data-key="4" title="Back (right-click)">◁</button>
+        <button data-key="3" title="Home (middle-click)">○</button>
+        <button data-key="187" title="Recent apps">▢</button>
+      </div>
+      <div class="nav-group">
+        <button data-key="25" title="Volume down">🔉</button>
+        <button data-key="24" title="Volume up">🔊</button>
+        <button data-key="26" title="Power">⏻</button>
+        <button data-act="screenoff" title="Turn phone screen off, keep mirroring">🌙</button>
+        <button data-act="rotate" title="Rotate device">⟳</button>
+        <button data-act="notif" title="Notifications panel">⇣</button>
+      </div>
+      <div class="nav-group">
+        <button data-act="shot" title="Full-resolution screenshot">📷</button>
+        <button data-act="copyframe" title="Copy current frame to clipboard">⧉</button>
+        <button data-act="record" id="btn-rec" title="Record the stream (WebM)">⏺</button>
+        <button data-act="inspect" id="btn-inspect" title="Inspect UI elements">⌖</button>
+        <button data-act="fullscreen" title="Fullscreen">⛶</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- ───────────── tools ───────────── -->
+  <section class="tools admin-only">
+    <nav class="tabs" id="tabs"></nav>
+    <div class="tab-body" id="tab-body"></div>
+  </section>
+</div>
+
+<div id="toasts" class="toasts"></div>
+<div id="modal" class="modal hidden"><div class="modal-card" id="modal-card"></div></div>
+<div id="drop" class="drop hidden"><div>Drop <b>.apk</b> to install · any other file goes to <b>/sdcard/Download</b></div></div>
+<div id="palette" class="palette hidden">
+  <div class="palette-card">
+    <input id="palette-input" placeholder="Type a command…" autocomplete="off" spellcheck="false">
+    <div id="palette-list" class="palette-list"></div>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

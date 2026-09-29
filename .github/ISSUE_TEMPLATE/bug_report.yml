@@ -1,0 +1,31 @@
+name: 🐞 Bug report
+description: Something isn't working
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `mahdicpy doctor`
+      render: text
+  - type: input
+    id: device
+    attributes:
+      label: Device & Android version
+      placeholder: Pixel 7, Android 14
+  - type: input
+    id: host
+    attributes:
+      label: Host OS & browser (for the web panel)
+      placeholder: macOS 15 / Chrome 140
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Terminal output of `mahdicpy web` or the browser console. Remove access tokens before pasting!

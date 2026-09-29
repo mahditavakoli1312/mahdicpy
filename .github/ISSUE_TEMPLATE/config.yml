@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: scrcpy issues (mirroring engine)
+    url: https://github.com/Genymobile/scrcpy/issues
+    about: Problems in scrcpy itself belong upstream.
