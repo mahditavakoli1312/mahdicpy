@@ -17,6 +17,13 @@ jobs:
         run: python -m py_compile mahdicpy web/server.py
       - name: CLI smoke test
         run: python mahdicpy help && python mahdicpy otg --dry-run
+      - name: Shortcuts (create + remove)
+        run: |
+          python mahdicpy shortcut --desktop
+          test -f ~/.local/share/applications/mahdicpy.desktop
+          test -f ~/.local/share/applications/mahdicpy-panel.desktop
+          python mahdicpy shortcut --desktop --remove
+          test ! -e ~/.local/share/applications/mahdicpy.desktop
       - name: JavaScript syntax
         run: node --check web/app.js
       - name: Shell syntax

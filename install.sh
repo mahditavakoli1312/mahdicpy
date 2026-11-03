@@ -4,6 +4,7 @@
 #
 #   ./install.sh               install scrcpy 3.3.4 into ./vendor and link
 #   ./install.sh --no-link     skip creating /usr/local/bin/mahdicpy
+#   ./install.sh --no-shortcut skip the app-menu shortcuts (mirror + web panel)
 #   SCRCPY_VERSION=3.3.4 ./install.sh
 set -euo pipefail
 
@@ -11,7 +12,14 @@ VERSION="${SCRCPY_VERSION:-3.3.4}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR="$HERE/vendor"
 LINK=1
-[[ "${1:-}" == "--no-link" ]] && LINK=0
+SHORTCUT=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-link) LINK=0 ;;
+    --no-shortcut) SHORTCUT=0 ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
 
 c() { printf "\033[%sm%s\033[0m" "$1" "$2"; }
 say() { echo "$(c '36' '›') $*"; }
@@ -63,6 +71,9 @@ ok "scrcpy $VERSION installed in vendor/"
 
 if [[ $LINK == 1 ]]; then
   "$HERE/mahdicpy" link || true
+fi
+if [[ $SHORTCUT == 1 ]]; then
+  "$HERE/mahdicpy" shortcut || true
 fi
 
 echo

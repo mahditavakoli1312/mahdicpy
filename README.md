@@ -57,6 +57,22 @@ mahdicpy web        # 🌐 opens the web panel
 mahdicpy            # 📱 classic native scrcpy window, auto-tuned
 ```
 
+### 🖱 App shortcuts (macOS · Linux · Windows)
+
+```bash
+mahdicpy shortcut             # adds "mahdicpy" and "mahdicpy Panel" to your app menu
+mahdicpy shortcut --desktop   # …and icons on the desktop
+mahdicpy shortcut --remove    # removes them
+```
+
+| OS | Where they go | Notes |
+|---|---|---|
+| macOS | `~/Applications` (Launchpad, Spotlight, Dock) | Panel runs in the background; a failed start shows an alert with the log |
+| Linux | `~/.local/share/applications` (`.desktop`) | Panel opens in a terminal; close it to stop the server |
+| Windows | Start menu (`.lnk`) | Run once with `python mahdicpy shortcut`; Panel opens in a console window, close it to stop |
+
+**mahdicpy** mirrors your phone in a native window. **mahdicpy Panel** starts the web panel and opens it in your browser. If the panel is already running, it just opens the browser again. `install.sh` creates the shortcuts for you (skip with `--no-shortcut`). Run `mahdicpy shortcut` again if you move the folder.
+
 ---
 
 ## 🌐 The web panel
@@ -169,7 +185,7 @@ Global flags: `--watch` (auto-reconnect), `--rec`, `-s <serial|ip>`, `@profile`,
 <details><summary><b>Which devices / OSes are supported?</b></summary>
 
 Any Android 5.0+ device with USB debugging (audio needs 11+, camera 12+, virtual displays 10+).
-Host: macOS (Intel & Apple Silicon) and Linux x86_64 via `install.sh`; anywhere scrcpy runs if it's on your `PATH`.
+Host: macOS (Intel & Apple Silicon) and Linux x86_64 via `install.sh`; anywhere scrcpy runs if it's on your `PATH` (including Windows, with `python mahdicpy …`). `mahdicpy shortcut` adds app shortcuts on macOS, Linux and Windows.
 Viewers: any modern browser — Chrome/Edge, Safari 16.4+, Firefox 130+.
 </details>
 

@@ -24,6 +24,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -1280,9 +1282,19 @@ def load_tokens(fixed=None):
     return t
 
 
+def panel_running(url):
+    """True if a mahdicpy panel that accepts our admin token already listens on this port."""
+    try:
+        with urllib.request.urlopen(url.replace("/?t=", "/api/me?t="), timeout=1.5) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
 class Server(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # on Windows SO_REUSEADDR lets a second server steal a port that is in use
+    allow_reuse_address = not sys.platform.startswith("win")
 
 
 def main():
@@ -1301,7 +1313,17 @@ def main():
     Handler.tokens = {tokens["admin"]: "admin", tokens["view"]: "view"}
 
     host = "0.0.0.0" if a.lan else "127.0.0.1"
-    httpd = Server((host, a.port), Handler)
+    local_url = f"http://127.0.0.1:{a.port}/?t={tokens['admin']}"
+    if not a.lan and panel_running(local_url):
+        # e.g. a second click on the "mahdicpy Panel" shortcut: reuse the running panel
+        print(f"  mahdicpy web panel already running: {local_url}")
+        if a.open:
+            webbrowser.open(local_url)
+        return
+    try:
+        httpd = Server((host, a.port), Handler)
+    except OSError as e:
+        sys.exit(f"  port {a.port} is busy ({e.strerror}); try: mahdicpy web --port {a.port + 1}")
     scheme = "http"
     ip = lan_ip() if a.lan else "127.0.0.1"
     if a.lan and not a.http:
@@ -1327,7 +1349,7 @@ def main():
             print(c("2")("  Self-signed certificate: browsers will warn once — choose 'Advanced › Proceed'."))
     print(c("2")("\n  Anyone with the full link can control your devices. Ctrl+C to stop.\n"))
     if a.open:
-        subprocess.Popen(["open", f"{local}/?t={tokens['admin']}"])
+        webbrowser.open(f"{local}/?t={tokens['admin']}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

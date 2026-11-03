@@ -72,6 +72,22 @@ mahdicpy doctor          # بررسی سلامت نصب
 
 > اگر macOS موقع اولین اجرا به `scrcpy` یا `adb` اجازه نداد: **System Settings › Privacy & Security › Allow Anyway**
 
+### 🖱 میانبر برنامه (مک، لینوکس و ویندوز)
+
+```bash
+mahdicpy shortcut             # «mahdicpy» و «mahdicpy Panel» را به منوی برنامه‌ها اضافه می‌کند
+mahdicpy shortcut --desktop   # آیکون روی دسکتاپ هم می‌سازد
+mahdicpy shortcut --remove    # میانبرها را حذف می‌کند
+```
+
+| سیستم‌عامل | محل میانبر | توضیح |
+|---|---|---|
+| مک | `~/Applications` (لانچ‌پد، Spotlight و Dock) | پنل در پس‌زمینه اجرا می‌شود و اگر اجرا نشود، پیام خطا به‌همراه لاگ نشان می‌دهد |
+| لینوکس | `~/.local/share/applications` (فایل `.desktop`) | پنل داخل ترمینال باز می‌شود و با بستن ترمینال متوقف می‌شود |
+| ویندوز | منوی Start (فایل `.lnk`) | یک بار `python mahdicpy shortcut` را اجرا کنید. پنل در یک پنجرهٔ کنسول باز می‌شود و با بستن آن متوقف می‌شود |
+
+**mahdicpy** صفحهٔ گوشی را در پنجرهٔ جدا نشان می‌دهد. **mahdicpy Panel** پنل وب را اجرا می‌کند و در مرورگر باز می‌کند. اگر پنل از قبل در حال اجرا باشد، فقط مرورگر را دوباره باز می‌کند. `install.sh` میانبرها را خودش می‌سازد (با `--no-shortcut` این کار انجام نمی‌شود). اگر پوشه را جابه‌جا کردید، `mahdicpy shortcut` را دوباره اجرا کنید.
+
 ### آماده کردن گوشی (فقط یک بار)
 
 1. **Settings › About phone** → هفت بار روی **Build number** بزنید.
@@ -301,6 +317,7 @@ mahdicpy all -b 4M          # هر گزینهٔ scrcpy روی همه اعمال 
 | `mahdicpy restart-adb` | رفع گیر کردن adb یا وضعیت offline |
 | `mahdicpy doctor` | بررسی کامل تنظیمات |
 | `mahdicpy link` | نصب دستور در `/usr/local/bin` |
+| `mahdicpy shortcut [--desktop]` | ساخت میانبر برنامه برای نمایش گوشی و پنل وب در مک، لینوکس و ویندوز (`--remove` برای حذف) |
 | `mahdicpy --version` | نسخهٔ mahdicpy و scrcpy |
 
 نمونهٔ خروجی `info`:

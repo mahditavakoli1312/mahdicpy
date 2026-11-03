@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `mahdicpy shortcut [--desktop] [--remove]`: app shortcuts for the mirror and the web panel on macOS (`.app`), Linux (`.desktop`) and Windows (`.lnk`); `install.sh` creates them (opt out with `--no-shortcut`)
+- Web panel: opens the browser on every OS (was macOS-only), reuses an already-running panel instead of failing on the busy port, and reports a clear error when the port is taken
+- CLI finds a bundled `scrcpy.exe` / `adb.exe` on Windows
+
 ## v1.0.0 — 2026-09-29
 
 First public release.

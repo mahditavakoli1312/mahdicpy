@@ -25,8 +25,9 @@ HERE = Path(os.path.realpath(__file__)).parent
 def find_tool(name):
     """Bundled copy (next to mahdicpy or in vendor/) first, then PATH."""
     for d in (HERE, HERE / "vendor"):
-        if (d / name).is_file():
-            return str(d / name)
+        for n in (name, name + ".exe"):
+            if (d / n).is_file():
+                return str(d / n)
     return shutil.which(name) or name
 
 
@@ -51,7 +52,7 @@ EXIT_DISCONNECTED = 2  # scrcpy exit code when the device goes away
 
 # ─────────────────────────────── styling ────────────────────────────────
 
-_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+_COLOR = bool(sys.stdout) and sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
 
 def _c(code):
@@ -772,6 +773,205 @@ def cmd_link(args):
     return 0
 
 
+# ─────────────────────────────── shortcuts ──────────────────────────────
+
+SHORTCUTS = [  # (name, mahdicpy arguments, description)
+    ("mahdicpy", [], "Mirror and control your Android phone"),
+    ("mahdicpy Panel", ["web", "--open"], "mahdicpy web panel: mirror + developer toolkit"),
+]
+
+
+def _png_size(png):
+    data = png.read_bytes()[:24]
+    return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+
+
+def _mac_launcher(name, argv):
+    script = shlex.quote(str(Path(os.path.realpath(__file__))))
+    slug = name.lower().replace(" ", "-")
+    head = ('#!/bin/bash\n'
+            f'# {name} launcher, created by `mahdicpy shortcut`.\n'
+            'export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"\n'
+            f'M={script}\nLOG="$HOME/Library/Logs/{slug}.log"\n'
+            'fail() {\n'
+            '  msg=$(tail -n 6 "$LOG" | sed -e \'s/\\x1b\\[[0-9;]*m//g\' -e \'s/"/\\\\"/g\')\n'
+            f'  osascript -e "display alert \\"{name} could not start\\" message \\"$msg\\n\\nFull log: $LOG\\" as critical"\n'
+            '}\n')
+    if argv and argv[0] == "web":
+        return head + (
+            'running() { lsof -nP -iTCP:8765 -sTCP:LISTEN >/dev/null 2>&1; }\n'
+            'if running; then exec "$M" web --open >/dev/null 2>&1; fi\n'
+            'nohup "$M" web --open >"$LOG" 2>&1 </dev/null &\n'
+            'for _ in $(seq 1 50); do running && exit 0; sleep 0.2; done\n'
+            'fail; exit 1\n')
+    return head + '"$M" "$@" >"$LOG" 2>&1 || fail\n'
+
+
+def _mac_icns(dest):
+    """Build an .icns from mahdicpy.png with sips + iconutil (both ship with macOS)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        iconset = Path(tmp) / "mahdicpy.iconset"
+        iconset.mkdir()
+        for px in (16, 32, 64, 128, 256, 512):
+            for scale, suffix in ((1, ""), (2, "@2x")):
+                out = iconset / f"icon_{px}x{px}{suffix}.png"
+                subprocess.run(["sips", "-z", str(px * scale), str(px * scale), str(ICON), "--out", str(out)],
+                               capture_output=True)
+        r = subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(dest)], capture_output=True)
+        return r.returncode == 0
+
+
+def _shortcuts_macos(remove, desktop):
+    made = []
+    folders = [Path.home() / "Applications"] + ([Path.home() / "Desktop"] if desktop else [])
+    for folder in folders:
+        for name, argv, _ in SHORTCUTS:
+            app = folder / f"{name}.app"
+            if app.exists():
+                shutil.rmtree(app)
+            if remove:
+                continue
+            exe = name.lower().replace(" ", "-")
+            (app / "Contents" / "MacOS").mkdir(parents=True)
+            (app / "Contents" / "Resources").mkdir()
+            ident = "local.mahdicpy." + ("panel" if argv else "launcher")
+            (app / "Contents" / "Info.plist").write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>{name}</string>
+  <key>CFBundleDisplayName</key><string>{name}</string>
+  <key>CFBundleIdentifier</key><string>{ident}</string>
+  <key>CFBundleExecutable</key><string>{exe}</string>
+  <key>CFBundleIconFile</key><string>mahdicpy</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>{VERSION}</string>
+  <key>CFBundleShortVersionString</key><string>{VERSION}</string>
+</dict></plist>
+""")
+            launcher = app / "Contents" / "MacOS" / exe
+            launcher.write_text(_mac_launcher(name, argv))
+            launcher.chmod(0o755)
+            if ICON.exists() and not _mac_icns(app / "Contents" / "Resources" / "mahdicpy.icns"):
+                warn(f"could not build the icon for {app.name}")
+            made.append(app)
+        # refresh Finder / Dock icon cache
+        subprocess.run(["touch", str(folder)], capture_output=True)
+    return made
+
+
+def _desktop_exec_arg(s):
+    return '"' + re.sub(r'(["`$\\])', r"\\\1", s) + '"'
+
+
+def _shortcuts_linux(remove, desktop):
+    made = []
+    data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    folders = [data / "applications"]
+    if desktop:
+        out = ""
+        if shutil.which("xdg-user-dir"):
+            out = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True, text=True).stdout.strip()
+        folders.append(Path(out) if out else Path.home() / "Desktop")
+    script = os.path.realpath(__file__)
+    for folder in folders:
+        for name, argv, comment in SHORTCUTS:
+            f = folder / (name.lower().replace(" ", "-") + ".desktop")
+            if remove:
+                f.unlink(missing_ok=True)
+                continue
+            folder.mkdir(parents=True, exist_ok=True)
+            cmd = " ".join(_desktop_exec_arg(a) for a in [sys.executable, script] + argv)
+            f.write_text("[Desktop Entry]\nType=Application\nVersion=1.0\n"
+                         f"Name={name}\nComment={comment}\nExec={cmd}\nIcon={ICON}\n"
+                         f"Terminal={'true' if argv else 'false'}\n"
+                         "Categories=Utility;Development;\nStartupNotify=true\n")
+            f.chmod(0o755)
+            # GNOME only launches desktop icons that are marked trusted
+            if folder.name != "applications" and shutil.which("gio"):
+                subprocess.run(["gio", "set", str(f), "metadata::trusted", "true"], capture_output=True)
+            made.append(f)
+    if shutil.which("update-desktop-database"):
+        subprocess.run(["update-desktop-database", str(data / "applications")], capture_output=True)
+    return made
+
+
+def _windows_ico(dest):
+    """Write an .ico that embeds mahdicpy.png as-is (supported since Windows Vista)."""
+    png = ICON.read_bytes()
+    w, h = _png_size(ICON)
+    entry = bytes([w if w < 256 else 0, h if h < 256 else 0, 0, 0]) + \
+        (1).to_bytes(2, "little") + (32).to_bytes(2, "little") + \
+        len(png).to_bytes(4, "little") + (6 + 16).to_bytes(4, "little")
+    dest.write_bytes((0).to_bytes(2, "little") + (1).to_bytes(2, "little") + (1).to_bytes(2, "little")
+                     + entry + png)
+
+
+def _shortcuts_windows(remove, desktop):
+    made = []
+    appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    folders = [appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs"]
+    if desktop:
+        folders.append(Path(os.environ.get("USERPROFILE", Path.home())) / "Desktop")
+    ico = CONFIG_DIR / "mahdicpy.ico"
+    if not remove and ICON.exists():
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _windows_ico(ico)
+    script = os.path.realpath(__file__)
+    python = sys.executable
+    for folder in folders:
+        for name, argv, comment in SHORTCUTS:
+            lnk = folder / f"{name}.lnk"
+            if remove:
+                lnk.unlink(missing_ok=True)
+                continue
+            folder.mkdir(parents=True, exist_ok=True)
+            args = subprocess.list2cmdline([script] + argv)
+
+            def ps(s):
+                return "'" + str(s).replace("'", "''") + "'"
+            # mirror: minimized console (scrcpy opens its own window); panel: visible console, close it to stop
+            code = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut({ps(lnk)});"
+                    f"$s.TargetPath={ps(python)};$s.Arguments={ps(args)};"
+                    f"$s.WorkingDirectory={ps(HERE)};$s.Description={ps(comment)};"
+                    f"$s.WindowStyle={1 if argv else 7};"
+                    + (f"$s.IconLocation={ps(str(ico) + ',0')};" if ico.exists() else "")
+                    + "$s.Save()")
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", code],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                warn(f"could not create {lnk}: {r.stderr.strip()[-200:]}")
+                continue
+            made.append(lnk)
+    if remove:
+        ico.unlink(missing_ok=True)
+    return made
+
+
+def cmd_shortcut(args):
+    """Create (or --remove) app shortcuts for the mirror and the web panel."""
+    remove = "--remove" in args
+    desktop = "--desktop" in args
+    if sys.platform == "darwin":
+        made = _shortcuts_macos(remove, desktop)
+    elif sys.platform.startswith("win"):
+        made = _shortcuts_windows(remove, desktop)
+    elif sys.platform.startswith(("linux", "freebsd", "openbsd")):
+        made = _shortcuts_linux(remove, desktop)
+    else:
+        die(f"shortcuts are not supported on {sys.platform}")
+    if remove:
+        ok("shortcuts removed")
+        return 0
+    for p in made:
+        ok(f"created {bold(p)}")
+    where = {"darwin": "Launchpad / Spotlight / ~/Applications",
+             "win32": "the Start menu"}.get(sys.platform, "your applications menu")
+    info(f"open {bold('mahdicpy')} or {bold('mahdicpy Panel')} from {where}"
+         + ("" if desktop else dim("  (add --desktop for desktop icons too)")))
+    return 0 if made else 1
+
+
 def cmd_restart_adb(args):
     adb("kill-server")
     adb("start-server")
@@ -822,6 +1022,7 @@ def cmd_help(args=None):
         ("profile …", "save & reuse option sets (see README)"),
         ("doctor", "check your setup"),
         ("link", "install mahdicpy command in /usr/local/bin"),
+        ("shortcut [--desktop]", "app-menu shortcuts for the mirror + web panel (--remove)"),
         ("restart-adb", "fix stuck/offline devices"),
     ]
     for k, v in tools:
@@ -851,6 +1052,7 @@ COMMANDS = {
     "shot": cmd_shot, "screenshot": cmd_shot, "info": cmd_info,
     "devices": cmd_devices, "ls": cmd_devices, "install": cmd_install,
     "profile": cmd_profile, "doctor": cmd_doctor, "link": cmd_link,
+    "shortcut": cmd_shortcut, "shortcuts": cmd_shortcut,
     "restart-adb": cmd_restart_adb, "disconnect": cmd_disconnect,
     "web": cmd_web, "panel": cmd_web,
     "help": cmd_help, "-h": cmd_help, "--help": cmd_help,
