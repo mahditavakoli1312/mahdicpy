@@ -57,21 +57,59 @@ mahdicpy web        # 🌐 opens the web panel
 mahdicpy            # 📱 classic native scrcpy window, auto-tuned
 ```
 
-### 🖱 App shortcuts (macOS · Linux · Windows)
+### 🖱 How to add shortcuts (macOS · Linux · Windows)
+
+You get two shortcuts, both with the mahdicpy icon:
+
+- **mahdicpy**: shows your phone in its own window.
+- **mahdicpy Panel**: starts the web panel and opens it in your browser. If the panel is already running, it just opens the browser again.
+
+`./install.sh` adds them for you. To add them by hand, follow the steps for your OS.
+
+#### 🍎 macOS
+
+1. Open **Terminal** and go to the mahdicpy folder: `cd mahdicpy`
+2. Run:
+   ```bash
+   ./mahdicpy shortcut             # or: mahdicpy shortcut (after `mahdicpy link`)
+   ./mahdicpy shortcut --desktop   # optional: icons on the desktop too
+   ```
+3. Open **mahdicpy** or **mahdicpy Panel** from **Launchpad**, **Spotlight** (⌘ Space) or `~/Applications`.
+4. Optional: drag them to the **Dock**.
+
+> The first time you open one, macOS may block it. Go to **System Settings › Privacy & Security** and click **Open Anyway**.
+
+#### 🐧 Linux
+
+1. Open a terminal in the mahdicpy folder.
+2. Run:
+   ```bash
+   ./mahdicpy shortcut             # adds them to your applications menu
+   ./mahdicpy shortcut --desktop   # optional: icons on the desktop too
+   ```
+3. Open **mahdicpy** or **mahdicpy Panel** from your applications menu (GNOME Activities, KDE menu, …).
+
+> **mahdicpy Panel** opens in a terminal window. Close that window to stop the panel. If a desktop icon won't open, right-click it and choose **Allow Launching**.
+
+#### 🪟 Windows
+
+1. Install [Python 3](https://www.python.org/downloads/) (tick **Add python.exe to PATH**) and [scrcpy for Windows](https://github.com/Genymobile/scrcpy/releases). Put `scrcpy.exe` and `adb.exe` on your `PATH` or in the `vendor\` folder.
+2. Open **PowerShell** or **Command Prompt** in the mahdicpy folder.
+3. Run:
+   ```powershell
+   python mahdicpy shortcut             # adds them to the Start menu
+   python mahdicpy shortcut --desktop   # optional: icons on the desktop too
+   ```
+4. Open **mahdicpy** or **mahdicpy Panel** from the **Start menu**. You can right-click one and choose **Pin to Start** or **Pin to taskbar**.
+
+> **mahdicpy Panel** opens in a console window. Close that window to stop the panel.
+
+#### Remove or update shortcuts
 
 ```bash
-mahdicpy shortcut             # adds "mahdicpy" and "mahdicpy Panel" to your app menu
-mahdicpy shortcut --desktop   # …and icons on the desktop
-mahdicpy shortcut --remove    # removes them
+mahdicpy shortcut --remove             # removes all shortcuts (add --desktop to remove desktop icons too)
+mahdicpy shortcut                      # run again after moving the mahdicpy folder
 ```
-
-| OS | Where they go | Notes |
-|---|---|---|
-| macOS | `~/Applications` (Launchpad, Spotlight, Dock) | Panel runs in the background; a failed start shows an alert with the log |
-| Linux | `~/.local/share/applications` (`.desktop`) | Panel opens in a terminal; close it to stop the server |
-| Windows | Start menu (`.lnk`) | Run once with `python mahdicpy shortcut`; Panel opens in a console window, close it to stop |
-
-**mahdicpy** mirrors your phone in a native window. **mahdicpy Panel** starts the web panel and opens it in your browser. If the panel is already running, it just opens the browser again. `install.sh` creates the shortcuts for you (skip with `--no-shortcut`). Run `mahdicpy shortcut` again if you move the folder.
 
 ---
 

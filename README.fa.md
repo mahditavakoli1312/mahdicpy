@@ -17,6 +17,7 @@
 1. [mahdicpy چیست؟](#mahdicpy-چیست)
 1. [🌐 پنل وب (جدید)](#-پنل-وب)
 2. [نصب](#نصب)
+2. [افزودن میانبر](#افزودن-میانبر)
 3. [شروع سریع](#شروع-سریع)
 4. [حالت‌ها (Modes)](#حالتها-modes)
 5. [اتصال بی‌سیم (Wi-Fi)](#اتصال-بیسیم-wi-fi)
@@ -72,28 +73,68 @@ mahdicpy doctor          # بررسی سلامت نصب
 
 > اگر macOS موقع اولین اجرا به `scrcpy` یا `adb` اجازه نداد: **System Settings › Privacy & Security › Allow Anyway**
 
-### 🖱 میانبر برنامه (مک، لینوکس و ویندوز)
-
-```bash
-mahdicpy shortcut             # «mahdicpy» و «mahdicpy Panel» را به منوی برنامه‌ها اضافه می‌کند
-mahdicpy shortcut --desktop   # آیکون روی دسکتاپ هم می‌سازد
-mahdicpy shortcut --remove    # میانبرها را حذف می‌کند
-```
-
-| سیستم‌عامل | محل میانبر | توضیح |
-|---|---|---|
-| مک | `~/Applications` (لانچ‌پد، Spotlight و Dock) | پنل در پس‌زمینه اجرا می‌شود و اگر اجرا نشود، پیام خطا به‌همراه لاگ نشان می‌دهد |
-| لینوکس | `~/.local/share/applications` (فایل `.desktop`) | پنل داخل ترمینال باز می‌شود و با بستن ترمینال متوقف می‌شود |
-| ویندوز | منوی Start (فایل `.lnk`) | یک بار `python mahdicpy shortcut` را اجرا کنید. پنل در یک پنجرهٔ کنسول باز می‌شود و با بستن آن متوقف می‌شود |
-
-**mahdicpy** صفحهٔ گوشی را در پنجرهٔ جدا نشان می‌دهد. **mahdicpy Panel** پنل وب را اجرا می‌کند و در مرورگر باز می‌کند. اگر پنل از قبل در حال اجرا باشد، فقط مرورگر را دوباره باز می‌کند. `install.sh` میانبرها را خودش می‌سازد (با `--no-shortcut` این کار انجام نمی‌شود). اگر پوشه را جابه‌جا کردید، `mahdicpy shortcut` را دوباره اجرا کنید.
-
 ### آماده کردن گوشی (فقط یک بار)
 
 1. **Settings › About phone** → هفت بار روی **Build number** بزنید.
 2. **Settings › Developer options** → گزینهٔ **USB debugging** را روشن کنید.
 3. گوشی را با کابل وصل کنید و پیام **Allow USB debugging** را تأیید کنید.
 4. در گوشی‌های شیائومی گزینهٔ **USB debugging (Security settings)** را هم روشن کنید.
+
+---
+
+## افزودن میانبر
+
+دو میانبر با آیکون mahdicpy ساخته می‌شود:
+
+- **mahdicpy**: صفحهٔ گوشی را در یک پنجرهٔ جدا نشان می‌دهد.
+- **mahdicpy Panel**: پنل وب را اجرا می‌کند و در مرورگر باز می‌کند. اگر پنل از قبل در حال اجرا باشد، فقط مرورگر را دوباره باز می‌کند.
+
+`./install.sh` این میانبرها را خودش می‌سازد. برای ساختن آن‌ها به‌صورت دستی، مراحل سیستم‌عامل خودتان را دنبال کنید.
+
+### 🍎 مک
+
+1. **Terminal** را باز کنید و وارد پوشهٔ mahdicpy شوید: `cd mahdicpy`
+2. این دستور را اجرا کنید:
+   ```bash
+   ./mahdicpy shortcut             # یا بعد از mahdicpy link فقط: mahdicpy shortcut
+   ./mahdicpy shortcut --desktop   # اختیاری: آیکون روی دسکتاپ هم ساخته می‌شود
+   ```
+3. **mahdicpy** یا **mahdicpy Panel** را از **Launchpad**، **Spotlight** (⌘ Space) یا پوشهٔ `~/Applications` باز کنید.
+4. اختیاری: آن‌ها را به **Dock** بکشید.
+
+> اگر macOS بار اول اجازهٔ اجرا نداد: **System Settings › Privacy & Security** و بعد **Open Anyway**.
+
+### 🐧 لینوکس
+
+1. ترمینال را داخل پوشهٔ mahdicpy باز کنید.
+2. این دستور را اجرا کنید:
+   ```bash
+   ./mahdicpy shortcut             # میانبرها را به منوی برنامه‌ها اضافه می‌کند
+   ./mahdicpy shortcut --desktop   # اختیاری: آیکون روی دسکتاپ هم ساخته می‌شود
+   ```
+3. **mahdicpy** یا **mahdicpy Panel** را از منوی برنامه‌ها (Activities در GNOME یا منوی KDE) باز کنید.
+
+> **mahdicpy Panel** داخل یک پنجرهٔ ترمینال باز می‌شود و با بستن آن پنجره، پنل متوقف می‌شود. اگر آیکون دسکتاپ باز نشد، روی آن کلیک راست کنید و **Allow Launching** را بزنید.
+
+### 🪟 ویندوز
+
+1. [Python 3](https://www.python.org/downloads/) را نصب کنید (گزینهٔ **Add python.exe to PATH** را تیک بزنید). [scrcpy ویندوز](https://github.com/Genymobile/scrcpy/releases) را هم دانلود کنید و `scrcpy.exe` و `adb.exe` را در `PATH` یا در پوشهٔ `vendor\` بگذارید.
+2. **PowerShell** یا **Command Prompt** را داخل پوشهٔ mahdicpy باز کنید.
+3. این دستور را اجرا کنید:
+   ```powershell
+   python mahdicpy shortcut             # میانبرها را به منوی Start اضافه می‌کند
+   python mahdicpy shortcut --desktop   # اختیاری: آیکون روی دسکتاپ هم ساخته می‌شود
+   ```
+4. **mahdicpy** یا **mahdicpy Panel** را از **منوی Start** باز کنید. با کلیک راست و انتخاب **Pin to Start** یا **Pin to taskbar** می‌توانید آن‌ها را سنجاق کنید.
+
+> **mahdicpy Panel** در یک پنجرهٔ کنسول باز می‌شود و با بستن آن پنجره، پنل متوقف می‌شود.
+
+### حذف یا به‌روزرسانی میانبرها
+
+```bash
+mahdicpy shortcut --remove    # همهٔ میانبرها را حذف می‌کند (برای حذف آیکون‌های دسکتاپ، --desktop را هم اضافه کنید)
+mahdicpy shortcut             # اگر پوشهٔ mahdicpy را جابه‌جا کردید، دوباره اجرا کنید
+```
 
 ---
 
